@@ -1550,6 +1550,9 @@ struct IReplayManager
   DOCUMENT("Cancels the active replay loop. See :meth:`~renderdoc.ReplayController.ReplayLoop`.");
   virtual void CancelReplayLoop() = 0;
 
+  DOCUMENT("Returns the frame count from the last or current ReplayLoop call.");
+  virtual uint32_t GetReplayLoopFrameCount() = 0;
+
   DOCUMENT(R"(Retrieves the host that the manager is currently connected to.
 
 :return: The host connected to, or an invalid RemoteHost if no connection is active.

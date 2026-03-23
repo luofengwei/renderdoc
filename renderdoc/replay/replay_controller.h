@@ -239,6 +239,7 @@ public:
 
   void ReplayLoop(WindowingData window, ResourceId texid);
   void CancelReplayLoop();
+  uint32_t GetReplayLoopFrameCount();
 
   rdcstr CreateRGPProfile(WindowingData window);
 
@@ -270,6 +271,7 @@ private:
 
   int32_t m_ReplayLoopCancel = 0;
   int32_t m_ReplayLoopFinished = 0;
+  int32_t m_ReplayLoopFrameCount = 0;
 
   RDResult m_FatalError = ResultCode::Succeeded;
   ResultDetails m_FatalErrorResult = {ResultCode::Succeeded};

@@ -261,7 +261,17 @@ TEMPLATE_FIXEDARRAY_DECLARE(rdcfixedarray);
 %include <stdint.i>
 
 %include "apidefs.h"
+
+// Release GIL during ReplayLoop so CancelReplayLoop can be called from another thread.
+// Without this, ReplayLoop holds the GIL and blocks all other Python threads → deadlock.
+%exception IReplayController::ReplayLoop {
+  Py_BEGIN_ALLOW_THREADS
+  $action
+  Py_END_ALLOW_THREADS
+}
+
 %include "renderdoc_replay.h"
+
 %include "resourceid.h"
 %include "rdcarray.h"
 %include "stringise.h"

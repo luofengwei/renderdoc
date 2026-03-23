@@ -1865,13 +1865,16 @@ void ReplayController::ReplayLoop(WindowingData window, ResourceId texid)
 
   m_ReplayLoopCancel = 0;
   m_ReplayLoopFinished = 0;
+  m_ReplayLoopFrameCount = 0;
 
   while(Atomic::CmpExch32(&m_ReplayLoopCancel, 0, 0) == 0)
   {
-    m_pDevice->ReplayLog(10000000, eReplay_Full);
+    m_pDevice->ReplayLog(m_Actions.back()->eventId, eReplay_Full);
     FatalErrorCheck();
 
     output->Display();
+
+    Atomic::Inc32(&m_ReplayLoopFrameCount);
   }
 
   // restore back to where we were
@@ -1891,6 +1894,11 @@ void ReplayController::CancelReplayLoop()
   // wait for it to actually finish before returning
   while(Atomic::CmpExch32(&m_ReplayLoopFinished, 0, 0) == 0)
     Threading::Sleep(1);
+}
+
+uint32_t ReplayController::GetReplayLoopFrameCount()
+{
+  return (uint32_t)Atomic::CmpExch32(&m_ReplayLoopFrameCount, 0, 0);
 }
 
 ReplayOutput *ReplayController::CreateOutput(WindowingData window, ReplayOutputType type)

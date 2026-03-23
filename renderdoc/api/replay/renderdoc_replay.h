@@ -471,6 +471,12 @@ function must be called from another thread.
   DOCUMENT("Cancels a replay loop begun in :meth:`ReplayLoop`. Does nothing if no loop is active.");
   virtual void CancelReplayLoop() = 0;
 
+  DOCUMENT(R"(Returns the number of frames completed in the last or current :meth:`ReplayLoop` call.
+:return: The frame count.
+:rtype: int
+)");
+  virtual uint32_t GetReplayLoopFrameCount() = 0;
+
   DOCUMENT("Notify the interface that the file it has open has been changed on disk.");
   virtual void FileChanged() = 0;
 
