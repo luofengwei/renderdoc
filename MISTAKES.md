@@ -39,3 +39,17 @@
 **正确做法**: 使用 RDCLoopRunner 的 `/build-renderdoc` skill。
 
 **教训**: 见 RDCLoopRunner 全局 MISTAKES.md M002。
+
+---
+
+## M004: DLL git hash 与 APK versionName 不匹配 → 远程回放降速 3x
+
+**错误**: ReplayLoop 从 60 FPS 降到 18.9 FPS，`StartRemoteServer` 返回 `Failed to verify installed Android remote server`。
+
+**根因**: MSBuild 的 `renderdoc_version.vcxproj` 自动读取 git HEAD hash 作为 `GIT_COMMIT_HASH`。在 patch 分支上 HEAD 是 patch commit（`f4735a45`），而 APK 的 `versionName` 是 upstream base commit（`286e07140d96...`）。`android.cpp` 的 `CheckAndroidServerVersion()` 比较两者不一致 → verify 失败 → 重装 APK 但版本仍不匹配 → 权限丢失/server 异常 → 降级通信。
+
+**正确做法**: 在 `renderdoc/replay/version.cpp` 中 `#undef` + `#define GIT_COMMIT_HASH` 为 upstream base commit 的完整 40 字符 hash。上游注释本身就建议："local patches should still point to the hash of the base tree"。
+
+**修改文件**: `renderdoc/replay/version.cpp`（已应用）
+
+**教训**: 在 fork 分支上做 patch 后，**必须** pin base commit hash。不要依赖 MSBuild 自动取 HEAD——它会取到 patch commit 而非 base。

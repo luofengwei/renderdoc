@@ -10,7 +10,7 @@
 | 分支 | 用途 |
 |------|------|
 | `v1.x` | 跟踪上游 baldurk/renderdoc（不直接修改） |
-| `rdc-loop-runner-patches` | **工作分支** — 所有 RDCLoopRunner 需要的修改 |
+| `rdc-patches-v1.43-feb27` | **工作分支** — 所有 RDCLoopRunner 需要的修改 |
 
 ## 当前修改清单
 

@@ -1,0 +1,22 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(*)",
+      "Read(*)",
+      "Write(*)",
+      "Edit(*)"
+    ],
+    "deny": [],
+    "additionalDirectories": [
+      "//C:/Windows",
+      "//C:/Program Files",
+      "//C:/Program Files (x86)",
+      "~/AppData/Roaming/uv/python",
+      "~/.uv-shims"
+    ]
+  },
+  "sandbox": {
+    "enabled": true,
+    "autoAllowBashIfSandboxed": true
+  }
+}

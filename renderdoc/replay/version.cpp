@@ -31,9 +31,11 @@
 // On distributed builds this should be set to the last upstream git commit where the build comes
 // from. If any later commits are cherry-picked or local patches are applied, this should still
 // point to the hash of the tree that the build was based on.
-#if !defined(GIT_COMMIT_HASH)
-#define GIT_COMMIT_HASH "NO_GIT_COMMIT_HASH_DEFINED_AT_BUILD_TIME"
-#endif
+// RDCLoopRunner: Pin to upstream base commit (v1.43, 286e071) to match Android APK versionName.
+// Our local patches (ReplayLoop fix, GIL release, frame counter) don't change version identity.
+// This follows upstream guidance: "local patches should still point to the hash of the base tree."
+#undef GIT_COMMIT_HASH
+#define GIT_COMMIT_HASH "286e07140d96bf3acda4059e085e8f5eb0e92608"
 
 // Note the hash should be precisely 40 characters, as comes from git rev-parse.
 extern "C" const char GitVersionHash[41] = GIT_COMMIT_HASH;
