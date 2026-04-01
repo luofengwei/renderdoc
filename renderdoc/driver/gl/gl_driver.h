@@ -685,6 +685,9 @@ public:
   void ReplayLog(uint32_t startEventID, uint32_t endEventID, ReplayLogType replayType);
   RDResult ReadLogInitialisation(RDCFile *rdc, bool storeStructuredBuffers);
 
+  // RDCLoopRunner: skip ApplyInitialContents after first full replay
+  bool m_SkipInitialContents = false;
+
   GLuint GetFakeVAO0() { return m_Global_VAO0; }
   GLuint GetCurrentDefaultFBO() { return m_CurrentDefaultFBO; }
   const APIEvent &GetEvent(uint32_t eventId);

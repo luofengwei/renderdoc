@@ -5862,11 +5862,14 @@ void WrappedOpenGL::ReplayLog(uint32_t startEventID, uint32_t endEventID, Replay
     partial = false;
   }
 
-  if(!partial)
+  if(!partial && !m_SkipInitialContents)
   {
     RENDERDOC_PROFILEREGION("ApplyInitialContents");
     GLMarkerRegion apply("!!!!RenderDoc Internal: ApplyInitialContents");
     GetResourceManager()->ApplyInitialContents();
+
+    // RDCLoopRunner: after first full replay, skip ApplyInitialContents for subsequent frames
+    m_SkipInitialContents = true;
 
     m_WasActiveFeedback = false;
   }
