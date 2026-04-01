@@ -53,3 +53,15 @@
 **修改文件**: `renderdoc/replay/version.cpp`（已应用）
 
 **教训**: 在 fork 分支上做 patch 后，**必须** pin base commit hash。不要依赖 MSBuild 自动取 HEAD——它会取到 patch commit 而非 base。
+
+---
+
+## M005: 修改 replay_driver.h 虚函数 → DLL/PYD ABI 不兼容 → segfault
+
+**错误**: 新 DLL 加载后，Python 调用 `controller.GetRootActions()` 时 segfault。
+
+**根因**: 在 `IRemoteDriver`（`replay_driver.h`）中新增虚函数改变了虚表布局。旧 PYD 的虚函数偏移与新 DLL 不一致 → 任何虚函数调用都可能跳到错误地址。
+
+**正确做法**: 避免修改接口类的虚函数。改在具体实现类（如 `WrappedOpenGL`）内部用成员变量解决。若必须改接口，DLL 和 PYD 同时重编。
+
+**教训**: `replay_driver.h` 的 `IRemoteDriver`/`IReplayDriver` 是 DLL ↔ PYD 的 ABI 边界。新增虚函数 = 破坏 ABI。

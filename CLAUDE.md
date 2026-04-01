@@ -18,6 +18,7 @@
 2. `renderdoc.i` — SWIG 绑定添加 GIL 释放（防止 Python 死锁）
 3. `renderdoc_replay.h` + `replay_controller.h` — `GetReplayLoopFrameCount()` API
 4. `QRDInterface.h` — 新增接口声明
+5. `gl_driver.h` + `gl_driver.cpp` — 跳过重复 ApplyInitialContents（ReplayLoop 提速 3x）
 
 ## 工作原则
 
