@@ -238,6 +238,7 @@ public:
   rdcarray<WindowingSystem> GetSupportedWindowSystems();
 
   void ReplayLoop(WindowingData window, ResourceId texid);
+  uint32_t RemoteReplayLoop(uint32_t durationMs);
   void CancelReplayLoop();
   uint32_t GetReplayLoopFrameCount();
 

@@ -468,6 +468,18 @@ function must be called from another thread.
 )");
   virtual rdcstr CreateRGPProfile(WindowingData window) = 0;
 
+  DOCUMENT(R"(Starts a replay loop on the remote Android device for the given duration.
+
+The loop runs entirely on the device (fire-and-forget RPC). This function returns immediately.
+After the duration expires, the device writes a result file that can be retrieved via adb pull.
+Only works when connected to a remote device; returns 0 and does nothing in local mode.
+
+:param int durationMs: How long to loop in milliseconds.
+:return: 0 on success (RPC sent), non-zero on error.
+:rtype: int
+)");
+  virtual uint32_t RemoteReplayLoop(uint32_t durationMs) = 0;
+
   DOCUMENT("Cancels a replay loop begun in :meth:`ReplayLoop`. Does nothing if no loop is active.");
   virtual void CancelReplayLoop() = 0;
 

@@ -27,6 +27,7 @@
 #include <string.h>
 #include <time.h>
 #include "common/dds_readwrite.h"
+#include "core/replay_proxy.h"
 #include "driver/ihv/amd/amd_isa.h"
 #include "driver/ihv/amd/amd_rgp.h"
 #include "jpeg-compressor/jpgd.h"
@@ -1843,6 +1844,14 @@ void ReplayController::ReplayLoop(WindowingData window, ResourceId texid)
 {
   CHECK_REPLAY_THREAD();
 
+  // Local mode only. For remote Android replay, use RemoteReplayLoop(durationMs).
+  if(m_pDevice->IsRemoteProxy())
+  {
+    RDCERR("ReplayLoop() called on remote proxy. Use RemoteReplayLoop(durationMs) instead.");
+    return;
+  }
+
+  // Local mode: original code path
   ReplayOutput *output = CreateOutput(window, ReplayOutputType::Texture);
 
   TextureDisplay d;
@@ -1885,6 +1894,28 @@ void ReplayController::ReplayLoop(WindowingData window, ResourceId texid)
 
   // mark that the loop is finished
   Atomic::Inc32(&m_ReplayLoopFinished);
+}
+
+uint32_t ReplayController::RemoteReplayLoop(uint32_t durationMs)
+{
+  CHECK_REPLAY_THREAD();
+
+  if(!m_pDevice->IsRemoteProxy())
+  {
+    RDCERR("RemoteReplayLoop() called in local mode. Use ReplayLoop() instead.");
+    return 1;
+  }
+
+  ReplayProxy *proxy = static_cast<ReplayProxy *>(m_pDevice);
+  uint32_t lastEID = m_Actions.back()->eventId;
+
+  RDCLOG("RemoteReplayLoop: lastEID=%u, durationMs=%u", lastEID, durationMs);
+
+  // Fire-and-forget RPC. Server returns immediately, then loops for durationMs.
+  // After the loop, server writes result file to device storage (adb pull to retrieve).
+  proxy->RemoteReplayLoopChunk(lastEID, durationMs);
+
+  return 0;
 }
 
 void ReplayController::CancelReplayLoop()

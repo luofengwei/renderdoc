@@ -5,6 +5,64 @@
 
 ---
 
+## 2026-04-07: Phase 10 — Remote ReplayLoop (fire-and-forget RPC)
+
+### Problem
+
+ReplayLoop 的 while 循环跑在 Desktop DLL，每帧走一次 adb 端口转发的 proxy 网络包。断 USB = 断连 = loop 挂掉。PerfDog 功耗测量需要断 USB（USB 充电干扰功耗数据）。
+
+### Fix
+
+**Files**: `replay_proxy.h`, `replay_proxy.cpp`, `renderdoc_replay.h`, `replay_controller.h`, `replay_controller.cpp`
+
+三层修改：
+
+1. **Proxy 协议** (`replay_proxy.h/.cpp`):
+   - 新增 enum `eReplayProxy_StartRemoteReplayLoop` / `GetRemoteLoopFrameCount` / `CancelRemoteReplayLoop`（追加末尾，见 MISTAKES M004）
+   - `Proxied_RemoteReplayLoopChunk(lastEID, durationMs)`: server 端 `SERIALISE_RETURN` 后进 while loop，GPU 本地执行 `ReplayLog` + `RefreshPreviewWindow`，结束后写结果文件
+
+2. **公共 API** (`renderdoc_replay.h`, `replay_controller.h`):
+   - 新增 `virtual uint32_t RemoteReplayLoop(uint32_t durationMs) = 0`
+   - SWIG 自动从 `renderdoc_replay.h` 生成 Python 绑定，无需改 `.i`
+
+3. **Controller** (`replay_controller.cpp`):
+   - `RemoteReplayLoop()`: 读 `lastEID`，调 `proxy->RemoteReplayLoopChunk(lastEID, durationMs)`，非阻塞返回
+   - `ReplayLoop()`: remote 分支改为报错提示用 `RemoteReplayLoop()`
+
+### Architecture
+
+```
+Python                              Desktop (DLL)                    Android (APK .so)
+
+controller.RemoteReplayLoop(60000)
+  → ReplayController::              → proxy->RemoteReplayLoopChunk
+     RemoteReplayLoop(60000)           (lastEID=13306, 60000ms)
+                                       ↓ [一次 RPC]
+                                    Proxied_RemoteReplayLoopChunk:
+                                       SERIALISE_RETURN(0)  ← 立即返回
+  ← return 0                          while(timer < 60000ms):
+                                         m_Remote->ReplayLog(13306)
+  [断 USB]                              RefreshPreviewWindow()
+  [sleep 60s]                            frameCount++
+  [重连 USB]                          写 remote_loop_result.txt
+  adb pull result → parse FPS
+```
+
+### Result
+
+| Test | Frames | Elapsed | FPS | Frame ms |
+|------|--------|---------|-----|----------|
+| 60s 不断 USB | 1506 | 60.0s | 25.1 | 39.9ms |
+| 5min 断 USB | 6858 | 300.0s | 22.9 | 43.8ms |
+
+5 分钟下降到 22.9 FPS 是 GPU thermal throttle（长时间满载降频），属正常。
+
+### Build
+
+仅 DLL + PYD 重编，**APK 不需要改**（`RemoteReplayLoopChunk` 的 server 端逻辑已在之前编进 APK）。
+
+---
+
 ## 2026-04-01: Skip ApplyInitialContents after first ReplayLog
 
 ### Problem

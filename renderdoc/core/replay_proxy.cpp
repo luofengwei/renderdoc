@@ -25,6 +25,7 @@
 
 #include "replay_proxy.h"
 #include <list>
+#include "common/timing.h"
 #include "lz4/lz4.h"
 #include "replay/dummy_driver.h"
 #include "serialise/lz4io.h"
@@ -102,6 +103,10 @@ rdcstr DoStringise(const ReplayProxyPacket &el)
     STRINGISE_ENUM_NAMED(eReplayProxy_GetDescriptorAccess, "GetDescriptorAccess");
     STRINGISE_ENUM_NAMED(eReplayProxy_GetDescriptorLocations, "GetDescriptorLocations");
     STRINGISE_ENUM_NAMED(eReplayProxy_GetDescriptorStores, "GetDescriptorStores");
+
+    STRINGISE_ENUM_NAMED(eReplayProxy_StartRemoteReplayLoop, "StartRemoteReplayLoop");
+    STRINGISE_ENUM_NAMED(eReplayProxy_GetRemoteLoopFrameCount, "GetRemoteLoopFrameCount");
+    STRINGISE_ENUM_NAMED(eReplayProxy_CancelRemoteReplayLoop, "CancelRemoteReplayLoop");
   }
   END_ENUM_STRINGISE();
 }
@@ -1398,6 +1403,89 @@ void ReplayProxy::Proxied_ReloadShaderDebugInformation(ParamSerialiser &paramser
 void ReplayProxy::ReloadShaderDebugInformation()
 {
   PROXY_FUNCTION(ReloadShaderDebugInformation);
+}
+
+// ---- Phase 10: Remote replay loop (fire-and-forget, runs on Tick() thread) ----
+
+template <typename ParamSerialiser, typename ReturnSerialiser>
+uint32_t ReplayProxy::Proxied_RemoteReplayLoopChunk(ParamSerialiser &paramser,
+                                                     ReturnSerialiser &retser, uint32_t lastEID,
+                                                     uint32_t durationMs)
+{
+  const ReplayProxyPacket expectedPacket = eReplayProxy_StartRemoteReplayLoop;
+  ReplayProxyPacket packet = eReplayProxy_StartRemoteReplayLoop;
+  uint32_t ret = 0;
+
+  {
+    BEGIN_PARAMS();
+    SERIALISE_ELEMENT(lastEID);
+    SERIALISE_ELEMENT(durationMs);
+    END_PARAMS();
+  }
+
+  if(paramser.IsReading() && !paramser.IsErrored() && !m_IsErrored)
+  {
+    // Server side: send return immediately so client can disconnect USB
+    SERIALISE_RETURN(ret);
+
+    RDCLOG("RemoteReplayLoop: starting loop, lastEID=%u, durationMs=%u", lastEID, durationMs);
+
+    // Log result file path for debugging (verify via: adb logcat -s renderdoc:V)
+    rdcstr debugResultPath = FileIO::GetAppFolderFilename("remote_loop_result.txt");
+    RDCLOG("RemoteReplayLoop: result will be written to: %s", debugResultPath.c_str());
+
+    // Client may disconnect USB during this -- that's OK, we keep looping
+    double durationD = (double)durationMs;
+    PerformanceTimer timer;
+    uint32_t frameCount = 0;
+
+    RDCLOG("RemoteReplayLoop: entering while loop, durationD=%.1f", durationD);
+
+    while(timer.GetMilliseconds() < durationD)
+    {
+      m_Remote->ReplayLog(lastEID, eReplay_Full);
+
+      RDResult err = m_Remote->FatalErrorCheck();
+      if(err != ResultCode::Succeeded)
+      {
+        RDCERR("RemoteReplayLoop: GPU error after %u frames, stopping", frameCount);
+        break;
+      }
+
+      RefreshPreviewWindow();
+      frameCount++;
+    }
+
+    double elapsedMs = timer.GetMilliseconds();
+
+    // Write result to file on device so client can adb pull after reconnect
+    rdcstr resultPath = FileIO::GetAppFolderFilename("remote_loop_result.txt");
+    FILE *f = FileIO::fopen(resultPath, FileIO::WriteText);
+    if(f)
+    {
+      char buf[256];
+      snprintf(buf, sizeof(buf), "frames=%u\nelapsed_ms=%.1f\n", frameCount, elapsedMs);
+      FileIO::fwrite(buf, 1, strlen(buf), f);
+      FileIO::fclose(f);
+      RDCLOG("RemoteReplayLoop done: %u frames in %.1fms, result at %s", frameCount, elapsedMs,
+             resultPath.c_str());
+    }
+    else
+    {
+      RDCERR("RemoteReplayLoop: failed to write result to %s", resultPath.c_str());
+    }
+
+    return ret;
+  }
+
+  SERIALISE_RETURN(ret);
+
+  return ret;
+}
+
+uint32_t ReplayProxy::RemoteReplayLoopChunk(uint32_t lastEID, uint32_t durationMs)
+{
+  PROXY_FUNCTION(RemoteReplayLoopChunk, lastEID, durationMs);
 }
 
 template <typename ParamSerialiser, typename ReturnSerialiser>
@@ -3187,6 +3275,10 @@ bool ReplayProxy::Tick(int type)
     case eReplayProxy_GetTargetShaderEncodings: GetTargetShaderEncodings(); break;
     case eReplayProxy_GetDriverInfo: GetDriverInfo(); break;
     case eReplayProxy_GetAvailableGPUs: GetAvailableGPUs(); break;
+    // Phase 10: Remote replay loop
+    case eReplayProxy_StartRemoteReplayLoop: RemoteReplayLoopChunk(0, 0); break;
+    case eReplayProxy_GetRemoteLoopFrameCount: break;    // unused, kept for enum compat
+    case eReplayProxy_CancelRemoteReplayLoop: break;     // unused, kept for enum compat
     default: RDCERR("Unexpected command %u", type); return false;
   }
 

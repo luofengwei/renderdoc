@@ -114,6 +114,11 @@ enum ReplayProxyPacket
 
   eReplayProxy_ClearReplayCache,
   eReplayProxy_ReloadShaderDebugInformation,
+
+  // Phase 10: Remote replay loop (append-only, see MISTAKES M004)
+  eReplayProxy_StartRemoteReplayLoop,
+  eReplayProxy_GetRemoteLoopFrameCount,
+  eReplayProxy_CancelRemoteReplayLoop,
 };
 
 DECLARE_REFLECTION_ENUM(ReplayProxyPacket);
@@ -563,6 +568,9 @@ public:
   IMPLEMENT_FUNCTION_PROXIED(void, RemoveReplacement, ResourceId id);
   IMPLEMENT_FUNCTION_PROXIED(void, ClearReplayCache);
   IMPLEMENT_FUNCTION_PROXIED(void, ReloadShaderDebugInformation);
+
+  // Phase 10: Remote replay loop control
+  IMPLEMENT_FUNCTION_PROXIED(uint32_t, RemoteReplayLoopChunk, uint32_t lastEID, uint32_t durationMs);
 
   // these functions are not part of the replay driver interface - they are similar to GetBufferData
   // and GetTextureData, but they do extra work to try and optimise transfer by delta-encoding the

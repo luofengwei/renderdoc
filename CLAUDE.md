@@ -19,6 +19,8 @@
 3. `renderdoc_replay.h` + `replay_controller.h` — `GetReplayLoopFrameCount()` API
 4. `QRDInterface.h` — 新增接口声明
 5. `gl_driver.h` + `gl_driver.cpp` — 跳过重复 ApplyInitialContents（ReplayLoop 提速 3x）
+6. `replay_proxy.h` + `replay_proxy.cpp` — Phase 10: `RemoteReplayLoopChunk` fire-and-forget RPC（server 端 GPU loop + 结果文件写入）
+7. `renderdoc_replay.h` + `replay_controller.h/.cpp` — Phase 10: `RemoteReplayLoop(durationMs)` 公共 API（Python 传 duration 给 server）
 
 ## 工作原则
 
