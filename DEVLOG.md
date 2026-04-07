@@ -76,7 +76,7 @@ export JAVA_HOME='C:/Program Files/Android/jdk/jdk-8.0.302.8-hotspot/jdk8u302-b0
 cmake .. [flags]  # see /build-renderdoc skill
 cmake --build . --target apk
 
-# 部署 APK（必须彻底卸载再装，见 RDCLoopRunner MISTAKES M008）
+# 部署 APK（必须彻底卸载再装，见 RDCLoopRunner MISTAKES M007）
 adb uninstall org.renderdoc.renderdoccmd.arm64
 adb push xxx.apk //data/local/tmp/renderdoc.apk
 adb shell 'pm install -r /data/local/tmp/renderdoc.apk'
