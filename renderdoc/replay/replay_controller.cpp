@@ -1844,27 +1844,6 @@ void ReplayController::ReplayLoop(WindowingData window, ResourceId texid)
 {
   CHECK_REPLAY_THREAD();
 
-  // Remote proxy mode: per-frame ReplayLog via proxy (original behavior).
-  // For disconnect-USB power testing, use RemoteReplayLoop(durationMs) instead.
-  if(m_pDevice->IsRemoteProxy())
-  {
-    m_ReplayLoopCancel = 0;
-    m_ReplayLoopFinished = 0;
-    m_ReplayLoopFrameCount = 0;
-
-    while(Atomic::CmpExch32(&m_ReplayLoopCancel, 0, 0) == 0)
-    {
-      m_pDevice->ReplayLog(m_Actions.back()->eventId, eReplay_Full);
-      FatalErrorCheck();
-
-      Atomic::Inc32(&m_ReplayLoopFrameCount);
-    }
-
-    Atomic::Inc32(&m_ReplayLoopFinished);
-    return;
-  }
-
-  // Local mode: original code path
   ReplayOutput *output = CreateOutput(window, ReplayOutputType::Texture);
 
   TextureDisplay d;
