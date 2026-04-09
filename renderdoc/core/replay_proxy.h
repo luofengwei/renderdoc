@@ -570,7 +570,7 @@ public:
   IMPLEMENT_FUNCTION_PROXIED(void, ReloadShaderDebugInformation);
 
   // Phase 10: Remote replay loop control
-  IMPLEMENT_FUNCTION_PROXIED(uint32_t, RemoteReplayLoopChunk, uint32_t lastEID, uint32_t durationMs);
+  IMPLEMENT_FUNCTION_PROXIED(uint32_t, RemoteReplayLoopChunk, uint32_t lastEID, uint32_t durationMs, uint32_t targetFPS);
 
   // these functions are not part of the replay driver interface - they are similar to GetBufferData
   // and GetTextureData, but they do extra work to try and optimise transfer by delta-encoding the

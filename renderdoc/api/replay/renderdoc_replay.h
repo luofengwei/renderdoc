@@ -475,10 +475,12 @@ After the duration expires, the device writes a result file that can be retrieve
 Only works when connected to a remote device; returns 0 and does nothing in local mode.
 
 :param int durationMs: How long to loop in milliseconds.
+:param int targetFPS: Target FPS cap. 0 means no limit (run as fast as possible).
+  When set, each frame will sleep to maintain the target frame time.
 :return: 0 on success (RPC sent), non-zero on error.
 :rtype: int
 )");
-  virtual uint32_t RemoteReplayLoop(uint32_t durationMs) = 0;
+  virtual uint32_t RemoteReplayLoop(uint32_t durationMs, uint32_t targetFPS = 0) = 0;
 
   DOCUMENT("Cancels a replay loop begun in :meth:`ReplayLoop`. Does nothing if no loop is active.");
   virtual void CancelReplayLoop() = 0;

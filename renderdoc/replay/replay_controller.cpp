@@ -1888,7 +1888,7 @@ void ReplayController::ReplayLoop(WindowingData window, ResourceId texid)
   Atomic::Inc32(&m_ReplayLoopFinished);
 }
 
-uint32_t ReplayController::RemoteReplayLoop(uint32_t durationMs)
+uint32_t ReplayController::RemoteReplayLoop(uint32_t durationMs, uint32_t targetFPS)
 {
   CHECK_REPLAY_THREAD();
 
@@ -1901,11 +1901,12 @@ uint32_t ReplayController::RemoteReplayLoop(uint32_t durationMs)
   ReplayProxy *proxy = static_cast<ReplayProxy *>(m_pDevice);
   uint32_t lastEID = m_Actions.back()->eventId;
 
-  RDCLOG("RemoteReplayLoop: lastEID=%u, durationMs=%u", lastEID, durationMs);
+  RDCLOG("RemoteReplayLoop: lastEID=%u, durationMs=%u, targetFPS=%u", lastEID, durationMs,
+         targetFPS);
 
   // Fire-and-forget RPC. Server returns immediately, then loops for durationMs.
   // After the loop, server writes result file to device storage (adb pull to retrieve).
-  proxy->RemoteReplayLoopChunk(lastEID, durationMs);
+  proxy->RemoteReplayLoopChunk(lastEID, durationMs, targetFPS);
 
   return 0;
 }

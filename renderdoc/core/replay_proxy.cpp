@@ -1410,7 +1410,7 @@ void ReplayProxy::ReloadShaderDebugInformation()
 template <typename ParamSerialiser, typename ReturnSerialiser>
 uint32_t ReplayProxy::Proxied_RemoteReplayLoopChunk(ParamSerialiser &paramser,
                                                      ReturnSerialiser &retser, uint32_t lastEID,
-                                                     uint32_t durationMs)
+                                                     uint32_t durationMs, uint32_t targetFPS)
 {
   const ReplayProxyPacket expectedPacket = eReplayProxy_StartRemoteReplayLoop;
   ReplayProxyPacket packet = eReplayProxy_StartRemoteReplayLoop;
@@ -1420,6 +1420,7 @@ uint32_t ReplayProxy::Proxied_RemoteReplayLoopChunk(ParamSerialiser &paramser,
     BEGIN_PARAMS();
     SERIALISE_ELEMENT(lastEID);
     SERIALISE_ELEMENT(durationMs);
+    SERIALISE_ELEMENT(targetFPS);
     END_PARAMS();
   }
 
@@ -1428,7 +1429,8 @@ uint32_t ReplayProxy::Proxied_RemoteReplayLoopChunk(ParamSerialiser &paramser,
     // Server side: send return immediately so client can disconnect USB
     SERIALISE_RETURN(ret);
 
-    RDCLOG("RemoteReplayLoop: starting loop, lastEID=%u, durationMs=%u", lastEID, durationMs);
+    RDCLOG("RemoteReplayLoop: starting loop, lastEID=%u, durationMs=%u, targetFPS=%u", lastEID,
+           durationMs, targetFPS);
 
     // Log result file path for debugging (verify via: adb logcat -s renderdoc:V)
     rdcstr debugResultPath = FileIO::GetAppFolderFilename("remote_loop_result.txt");
@@ -1436,13 +1438,17 @@ uint32_t ReplayProxy::Proxied_RemoteReplayLoopChunk(ParamSerialiser &paramser,
 
     // Client may disconnect USB during this -- that's OK, we keep looping
     double durationD = (double)durationMs;
+    double targetFrameMs = (targetFPS > 0) ? (1000.0 / (double)targetFPS) : 0.0;
     PerformanceTimer timer;
     uint32_t frameCount = 0;
 
-    RDCLOG("RemoteReplayLoop: entering while loop, durationD=%.1f", durationD);
+    RDCLOG("RemoteReplayLoop: entering while loop, durationD=%.1f, targetFrameMs=%.1f", durationD,
+           targetFrameMs);
 
     while(timer.GetMilliseconds() < durationD)
     {
+      PerformanceTimer frameTimer;
+
       m_Remote->ReplayLog(lastEID, eReplay_Full);
 
       RDResult err = m_Remote->FatalErrorCheck();
@@ -1450,6 +1456,18 @@ uint32_t ReplayProxy::Proxied_RemoteReplayLoopChunk(ParamSerialiser &paramser,
       {
         RDCERR("RemoteReplayLoop: GPU error after %u frames, stopping", frameCount);
         break;
+      }
+
+      // FPS cap: sleep BEFORE present so RefreshPreviewWindow is not starved
+      if(targetFrameMs > 0.0)
+      {
+        double frameElapsed = frameTimer.GetMilliseconds();
+        if(frameElapsed < targetFrameMs)
+        {
+          uint32_t sleepMs = (uint32_t)(targetFrameMs - frameElapsed);
+          if(sleepMs > 0)
+            Threading::Sleep(sleepMs);
+        }
       }
 
       RefreshPreviewWindow();
@@ -1483,9 +1501,10 @@ uint32_t ReplayProxy::Proxied_RemoteReplayLoopChunk(ParamSerialiser &paramser,
   return ret;
 }
 
-uint32_t ReplayProxy::RemoteReplayLoopChunk(uint32_t lastEID, uint32_t durationMs)
+uint32_t ReplayProxy::RemoteReplayLoopChunk(uint32_t lastEID, uint32_t durationMs,
+                                             uint32_t targetFPS)
 {
-  PROXY_FUNCTION(RemoteReplayLoopChunk, lastEID, durationMs);
+  PROXY_FUNCTION(RemoteReplayLoopChunk, lastEID, durationMs, targetFPS);
 }
 
 template <typename ParamSerialiser, typename ReturnSerialiser>
@@ -3276,7 +3295,7 @@ bool ReplayProxy::Tick(int type)
     case eReplayProxy_GetDriverInfo: GetDriverInfo(); break;
     case eReplayProxy_GetAvailableGPUs: GetAvailableGPUs(); break;
     // Phase 10: Remote replay loop
-    case eReplayProxy_StartRemoteReplayLoop: RemoteReplayLoopChunk(0, 0); break;
+    case eReplayProxy_StartRemoteReplayLoop: RemoteReplayLoopChunk(0, 0, 0); break;
     case eReplayProxy_GetRemoteLoopFrameCount: break;    // unused, kept for enum compat
     case eReplayProxy_CancelRemoteReplayLoop: break;     // unused, kept for enum compat
     default: RDCERR("Unexpected command %u", type); return false;
