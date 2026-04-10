@@ -1583,11 +1583,14 @@ void WrappedID3D11Device::ReplayLog(uint32_t startEventID, uint32_t endEventID,
     partial = false;
   }
 
-  if(!partial)
+  if(!partial && !m_SkipInitialContents)
   {
     RENDERDOC_PROFILEREGION("ApplyInitialContents");
     D3D11MarkerRegion apply("!!!!RenderDoc Internal: ApplyInitialContents");
     GetResourceManager()->ApplyInitialContents();
+
+    // RDCLoopRunner: skip on subsequent full replays
+    m_SkipInitialContents = true;
   }
 
   m_State = CaptureState::ActiveReplaying;

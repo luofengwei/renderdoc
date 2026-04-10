@@ -5,6 +5,44 @@
 
 ---
 
+## 2026-04-10: D3D11 SkipInitialContents
+
+### Problem
+
+D3D11 driver 没有 `m_SkipInitialContents`，每帧 `ReplayLog` 都执行 `ApplyInitialContents`。GL driver 已有此优化（2026-04-01），D3D11 需要对齐。
+
+### Fix
+
+**Files**: `renderdoc/driver/d3d11/d3d11_device.h`, `renderdoc/driver/d3d11/d3d11_device.cpp`
+
+对齐 GL driver 实现：
+
+`d3d11_device.h`:
+```cpp
+bool m_SkipInitialContents = false;  // RDCLoopRunner: skip repeated ApplyInitialContents in ReplayLoop
+```
+
+`d3d11_device.cpp` — `ReplayLog` 函数:
+```cpp
+if(!partial && !m_SkipInitialContents)
+{
+    ApplyInitialContents();
+    m_SkipInitialContents = true;  // skip on subsequent full replays
+}
+```
+
+### Build
+
+仅 DLL 重编（driver 内部改动，无 API/ABI 变更，PYD/APK 不需要）。
+
+### Result
+
+本地 ReplayLoop 验证（`error.rdc`, D3D11, 32 actions）：
+- 683 FPS（2 分钟稳定），帧时间 1.46ms
+- SkipInitialContents 从第一秒就生效，FPS 平稳无跳变
+
+---
+
 ## 2026-04-07: Phase 10 — Remote ReplayLoop (fire-and-forget RPC)
 
 ### Problem

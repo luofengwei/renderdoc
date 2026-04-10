@@ -574,6 +574,8 @@ private:
   void *m_FirstFrameCaptureWindow = NULL;
   bool m_AppControlledCapture = false;
 
+  bool m_SkipInitialContents = false;  // RDCLoopRunner: skip repeated ApplyInitialContents in ReplayLoop
+
   PerformanceTimer m_CaptureTimer;
 
   RDResult m_FailedReplayResult = ResultCode::APIReplayFailed;
