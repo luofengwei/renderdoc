@@ -1589,7 +1589,9 @@ void WrappedID3D11Device::ReplayLog(uint32_t startEventID, uint32_t endEventID,
     D3D11MarkerRegion apply("!!!!RenderDoc Internal: ApplyInitialContents");
     GetResourceManager()->ApplyInitialContents();
 
-    // RDCLoopRunner: skip on subsequent full replays
+    // RDCLoopRunner: skip on subsequent full replays.
+    // Safe because RDCLoopRunner uses one capture per process (see MISTAKES M006).
+    // If that changes, reset m_SkipInitialContents when re-opening a capture.
     m_SkipInitialContents = true;
   }
 
