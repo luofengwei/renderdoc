@@ -32,6 +32,8 @@
 #include <string.h>
 #include <unistd.h>
 #include <string>
+#include <stdio.h>
+#include <sys/system_properties.h>
 
 #include <android_native_app_glue.h>
 
@@ -435,6 +437,262 @@ std::vector<std::string> getRenderdoccmdArgs()
   return ret;
 }
 
+// Get the app folder path on Android (mirrors FileIO::GetAppFolderFilename logic)
+static std::string GetAndroidAppFolder()
+{
+  char platformVersionChar[92];
+  __system_property_get("ro.build.version.sdk", platformVersionChar);
+  int platformVersion = atoi(platformVersionChar);
+
+  const char *package = "org.renderdoc.renderdoccmd.arm64";
+  if(platformVersion < 30)
+    return std::string("/sdcard/Android/data/") + package + "/files";
+  else
+    return std::string("/sdcard/Android/media/") + package + "/files";
+}
+
+// Simple JSON string value extractor (no dependency on external JSON lib)
+static std::string JsonGetString(const std::string &json, const char *key)
+{
+  std::string searchKey = std::string("\"") + key + "\"";
+  size_t pos = json.find(searchKey);
+  if(pos == std::string::npos)
+    return "";
+  pos = json.find(':', pos + searchKey.size());
+  if(pos == std::string::npos)
+    return "";
+  pos = json.find('"', pos + 1);
+  if(pos == std::string::npos)
+    return "";
+  size_t end = json.find('"', pos + 1);
+  if(end == std::string::npos)
+    return "";
+  return json.substr(pos + 1, end - pos - 1);
+}
+
+// Simple JSON number value extractor
+static double JsonGetNumber(const std::string &json, const char *key)
+{
+  std::string searchKey = std::string("\"") + key + "\"";
+  size_t pos = json.find(searchKey);
+  if(pos == std::string::npos)
+    return 0.0;
+  pos = json.find(':', pos + searchKey.size());
+  if(pos == std::string::npos)
+    return 0.0;
+  // skip whitespace
+  pos++;
+  while(pos < json.size() && (json[pos] == ' ' || json[pos] == '\t'))
+    pos++;
+  return atof(json.c_str() + pos);
+}
+
+// SP-capturable local ReplayLoop: loads rdc on device, replays to Window Surface with eglSwapBuffers.
+// Called when SP launches renderdoccmd without Intent args and sp_replay_config.json exists.
+// Uses ReplayLoop(window, texid) — same path as remote replay loop (ReplayLog + Display + swap).
+static IReplayController *g_spRenderer = NULL;
+static double g_spDurationSeconds = 0;
+
+static void *spTimerThread(void *)
+{
+  // Sleep for the configured duration, then cancel the replay loop
+  usleep((useconds_t)(g_spDurationSeconds * 1000000.0));
+  if(g_spRenderer)
+  {
+    ANDROID_LOG("RunLocalReplayLoop: duration reached, cancelling loop");
+    g_spRenderer->CancelReplayLoop();
+  }
+  return NULL;
+}
+
+static void RunLocalReplayLoop()
+{
+  std::string appFolder = GetAndroidAppFolder();
+  std::string configPath = appFolder + "/sp_replay_config.json";
+
+  ANDROID_LOG("RunLocalReplayLoop: checking config at %s", configPath.c_str());
+
+  // Read config file
+  FILE *f = fopen(configPath.c_str(), "r");
+  if(!f)
+  {
+    ANDROID_LOG("RunLocalReplayLoop: no config file found, skipping");
+    return;
+  }
+
+  fseek(f, 0, SEEK_END);
+  long fileSize = ftell(f);
+  fseek(f, 0, SEEK_SET);
+
+  std::string jsonContent(fileSize, '\0');
+  fread(&jsonContent[0], 1, fileSize, f);
+  fclose(f);
+
+  // Parse config
+  std::string rdcPath = JsonGetString(jsonContent, "rdc_path");
+  double durationSeconds = JsonGetNumber(jsonContent, "duration_seconds");
+  int targetFPS = (int)JsonGetNumber(jsonContent, "target_fps");
+  (void)targetFPS;    // FPS control not used in ReplayLoop path (runs at GPU native speed)
+
+  if(rdcPath.empty())
+  {
+    ANDROID_LOG("RunLocalReplayLoop: rdc_path is empty in config");
+    return;
+  }
+
+  ANDROID_LOG("RunLocalReplayLoop: rdc=%s, duration=%.0fs, targetFPS=%d", rdcPath.c_str(),
+              durationSeconds, targetFPS);
+
+  // Wait for window to be available
+  int waitCount = 0;
+  while((!android_state || !android_state->window) && waitCount < 50)
+  {
+    usleep(100000);    // 100ms
+    waitCount++;
+  }
+
+  if(!android_state || !android_state->window)
+  {
+    ANDROID_LOG("RunLocalReplayLoop: no window available after 5s wait");
+    return;
+  }
+
+  // Acquire draw lock
+  m_DrawLock.lock();
+  ANDROID_LOG("RunLocalReplayLoop: draw lock acquired");
+
+  // Open capture file
+  ICaptureFile *capFile = RENDERDOC_OpenCaptureFile();
+  ResultDetails openResult = capFile->OpenFile(rdcPath.c_str(), "rdc", NULL);
+
+  if(openResult.code != ResultCode::Succeeded)
+  {
+    ANDROID_LOG("RunLocalReplayLoop: OpenFile failed: %s", openResult.Message().c_str());
+    capFile->Shutdown();
+    m_DrawLock.unlock();
+    return;
+  }
+
+  ANDROID_LOG("RunLocalReplayLoop: capture file opened");
+
+  // Open capture → get IReplayController
+  // Use Fastest optimisation to skip FillWithDiscardPattern (matches real device behavior)
+  ReplayOptions opts;
+  opts.optimisation = ReplayOptimisationLevel::Fastest;
+  IReplayController *renderer = NULL;
+  ResultDetails replayResult = {};
+  rdctie(replayResult, renderer) = capFile->OpenCapture(opts, NULL);
+
+  capFile->Shutdown();
+
+  if(replayResult.code != ResultCode::Succeeded || !renderer)
+  {
+    ANDROID_LOG("RunLocalReplayLoop: OpenCapture failed: %s", replayResult.Message().c_str());
+    m_DrawLock.unlock();
+    return;
+  }
+
+  ANDROID_LOG("RunLocalReplayLoop: replay controller created");
+
+  // Find texture ID for display (same logic as renderdoccmd.cpp DisplayRendererPreview)
+  ResourceId texid;
+
+  // Strategy 1: find SwapBuffer texture
+  rdcarray<TextureDescription> texs = renderer->GetTextures();
+  for(const TextureDescription &desc : texs)
+  {
+    if(desc.creationFlags & TextureCategory::SwapBuffer)
+    {
+      texid = desc.resourceId;
+      ANDROID_LOG("RunLocalReplayLoop: found SwapBuffer texture");
+      break;
+    }
+  }
+
+  // Strategy 2: if last action is Present, use its copyDestination
+  if(texid == ResourceId())
+  {
+    const rdcarray<ActionDescription> &actions = renderer->GetRootActions();
+    if(!actions.empty())
+    {
+      const ActionDescription *lastAction = &actions.back();
+      while(!lastAction->children.empty())
+        lastAction = &lastAction->children.back();
+      if(lastAction->flags & ActionFlags::Present)
+      {
+        ResourceId id = lastAction->copyDestination;
+        if(id != ResourceId())
+        {
+          texid = id;
+          ANDROID_LOG("RunLocalReplayLoop: using Present copyDestination");
+        }
+      }
+    }
+  }
+
+  // Strategy 3: fallback — find the largest 2D texture
+  if(texid == ResourceId())
+  {
+    uint64_t bestArea = 0;
+    for(const TextureDescription &desc : texs)
+    {
+      if(desc.width < 64 || desc.height < 64)
+        continue;
+      if(desc.dimension != 2)
+        continue;
+      uint64_t area = (uint64_t)desc.width * (uint64_t)desc.height;
+      if(area > bestArea)
+      {
+        bestArea = area;
+        texid = desc.resourceId;
+      }
+    }
+    if(texid != ResourceId())
+      ANDROID_LOG("RunLocalReplayLoop: using largest texture (fallback)");
+  }
+
+  if(texid == ResourceId())
+    ANDROID_LOG("RunLocalReplayLoop: WARNING — no texture found, display may be blank");
+
+  // Use ReplayLoop(window, texid) — same proven path as remote replay loop
+  // ReplayLoop internally does: ReplayLog(lastEID) → Display() → eglSwapBuffers, in a loop.
+  // It blocks until CancelReplayLoop() is called from another thread.
+  ANativeWindow *window = android_state->window;
+  WindowingData wnd = CreateAndroidWindowingData(window);
+
+  ANDROID_LOG("RunLocalReplayLoop: starting ReplayLoop (duration=%.0fs)", durationSeconds);
+
+  // Start timer thread to cancel loop after duration
+  g_spRenderer = renderer;
+  g_spDurationSeconds = durationSeconds;
+  pthread_t timerThread;
+  pthread_create(&timerThread, NULL, spTimerThread, NULL);
+
+  // This blocks until CancelReplayLoop() is called
+  renderer->ReplayLoop(wnd, texid);
+
+  pthread_join(timerThread, NULL);
+  g_spRenderer = NULL;
+
+  uint32_t frameCount = renderer->GetReplayLoopFrameCount();
+  ANDROID_LOG("RunLocalReplayLoop: DONE — %u frames", frameCount);
+
+  // Write result file
+  std::string resultPath = appFolder + "/sp_replay_loop_result.txt";
+  FILE *resultFile = fopen(resultPath.c_str(), "w");
+  if(resultFile)
+  {
+    fprintf(resultFile, "frames=%u\nmode=sp_local_replay\n", frameCount);
+    fclose(resultFile);
+    ANDROID_LOG("RunLocalReplayLoop: result written to %s", resultPath.c_str());
+  }
+
+  // Cleanup
+  renderer->Shutdown();
+  m_DrawLock.unlock();
+  ANDROID_LOG("RunLocalReplayLoop: cleanup done");
+}
+
 void *cmdthread(void *)
 {
   std::vector<std::string> args = getRenderdoccmdArgs();
@@ -446,6 +704,15 @@ void *cmdthread(void *)
     renderdoccmd(env, args);
     m_CmdLock.unlock();
     ANDROID_LOG("Exiting cmd thread");
+  }
+  else
+  {
+    // No Intent args — check if SP launched us for local replay
+    ANDROID_LOG("No Intent args, checking sp_replay_config.json");
+    m_CmdLock.lock();
+    RunLocalReplayLoop();
+    m_CmdLock.unlock();
+    ANDROID_LOG("SP local replay thread done");
   }
 
   // activity is done and should be closed

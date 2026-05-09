@@ -22,6 +22,10 @@
 6. `d3d11_device.h` + `d3d11_device.cpp` — D3D11 跳过重复 ApplyInitialContents（对齐 GL driver 实现）
 7. `replay_proxy.h` + `replay_proxy.cpp` — Phase 10: `RemoteReplayLoopChunk` fire-and-forget RPC（server 端 GPU loop + 结果文件写入）
 8. `renderdoc_replay.h` + `replay_controller.h/.cpp` — Phase 10: `RemoteReplayLoop(durationMs)` 公共 API（Python 传 duration 给 server）
+9. `renderdoccmd/renderdoccmd_android.cpp` — SP Local ReplayLoop：无 Intent args 时读 config + 本地 `ReplayLoop(window, texid)`，`OpenCapture` 用 `Fastest` 优化
+10. `renderdoc/driver/gl/egl_platform.cpp` — SP EGL 可见性：`debug.egl.profiler=1` 时优先 `eglGetProcAddress` 获取 EGL 函数
+
+**注意**: `ReplayOptimisationLevel::Fastest` 跳过 `FillWithDiscardPattern`（消除 glInvalidateFramebuffer 触发的全屏 blit，每帧约 +27.6% fragment 开销）。Python 侧 `remote_loader.py` 也做了对应改动（`opts.optimisation = Fastest`），无需重编 DLL/APK。
 
 ## 工作原则
 

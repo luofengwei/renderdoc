@@ -27,6 +27,10 @@
 #include "egl_dispatch_table.h"
 #include "gl_common.h"
 
+#if ENABLED(RDOC_ANDROID)
+#include <sys/system_properties.h>
+#endif
+
 static void *GetEGLHandle()
 {
 #if ENABLED(RDOC_WIN32)
@@ -475,6 +479,46 @@ bool EGLDispatchTable::PopulateForReplay()
 
   bool symbols_ok = true;
 
+  // First, get eglGetProcAddress via dlsym (this is the bootstrap function)
+  if(!this->GetProcAddress)
+    this->GetProcAddress =
+        (PFN_eglGetProcAddress)Process::GetFunctionAddress(handle, "eglGetProcAddress");
+
+#if ENABLED(RDOC_ANDROID)
+  // Check if an external GPU profiler (e.g. Snapdragon Profiler) is active.
+  // When debug.egl.profiler=1, the Adreno EGL driver wraps functions returned by
+  // eglGetProcAddress but not those obtained via dlsym. We must prefer eglGetProcAddress
+  // so the profiler can intercept EGL calls (especially eglSwapBuffers for frame boundaries).
+  // This is ONLY enabled when the profiler property is set — normal remote replay is unaffected.
+  char profilerProp[92] = {};
+  __system_property_get("debug.egl.profiler", profilerProp);
+  bool spProfilerActive = (profilerProp[0] == '1' && profilerProp[1] == '\0');
+
+  if(spProfilerActive)
+  {
+    RDCLOG("EGL profiler detected (debug.egl.profiler=1), using eglGetProcAddress for SP visibility");
+
+#define LOAD_FUNC(func, isext, replayrequired)                                                      \
+  if(!this->func && this->GetProcAddress)                                                           \
+    this->func = (CONCAT(PFN_egl, func))this->GetProcAddress("egl" STRINGIZE(func));               \
+  if(!this->func)                                                                                   \
+    this->func = (CONCAT(PFN_egl, func))Process::GetFunctionAddress(handle, "egl" STRINGIZE(func)); \
+                                                                                                    \
+  if(!this->func && !CheckConstParam(isext))                                                        \
+  {                                                                                                 \
+    if(CheckConstParam(replayrequired))                                                             \
+      symbols_ok = false;                                                                           \
+    RDCWARN("Unable to load '%s'", STRINGIZE(func));                                                \
+  }
+
+    EGL_HOOKED_SYMBOLS(LOAD_FUNC)
+    EGL_NONHOOKED_SYMBOLS(LOAD_FUNC)
+
+#undef LOAD_FUNC
+  }
+  else
+#endif    // RDOC_ANDROID
+  {
 #define LOAD_FUNC(func, isext, replayrequired)                                                      \
   if(!this->func)                                                                                   \
     this->func = (CONCAT(PFN_egl, func))Process::GetFunctionAddress(handle, "egl" STRINGIZE(func)); \
@@ -488,9 +532,11 @@ bool EGLDispatchTable::PopulateForReplay()
     RDCWARN("Unable to load '%s'", STRINGIZE(func));                                                \
   }
 
-  EGL_HOOKED_SYMBOLS(LOAD_FUNC)
-  EGL_NONHOOKED_SYMBOLS(LOAD_FUNC)
+    EGL_HOOKED_SYMBOLS(LOAD_FUNC)
+    EGL_NONHOOKED_SYMBOLS(LOAD_FUNC)
 
 #undef LOAD_FUNC
+  }
+
   return symbols_ok;
 }

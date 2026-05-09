@@ -5,6 +5,73 @@
 
 ---
 
+## 2026-05-09: SP-Capturable Local ReplayLoop + EGL Profiler Visibility
+
+### Problem
+
+Snapdragon Profiler (SP) 无法对 RenderDoc replay 做 Trace Capture / Take Snapshot：
+1. renderdoccmd 被 SP Launch 后无 Intent args → 原逻辑直接退出
+2. RenderDoc replay 的 EGL 函数通过 `dlsym` 获取，绕过了 SP 的 profiler hook 层
+3. replay 默认用 `Balanced` optimisation → `FillWithDiscardPattern` 每帧插 15 个全屏 blit（+27.6% fragment 开销）
+
+### Fix
+
+**Files**: `renderdoccmd/renderdoccmd_android.cpp`, `renderdoc/driver/gl/egl_platform.cpp`
+
+#### 改动 1: SP Local ReplayLoop (`renderdoccmd_android.cpp`)
+
+新增 `RunLocalReplayLoop()` 函数（~220 行），当 `cmdthread()` 无 Intent args 时调用：
+- 读设备上的 `sp_replay_config.json`（rdc 路径 + duration）
+- 本地 `RENDERDOC_OpenCaptureFile` → `OpenCapture(Fastest)` → `ReplayLoop(window, texid)`
+- timer 线程到时间后 `CancelReplayLoop()`
+- 画面渲染到 ANativeWindow → eglSwapBuffers → SP 帧边界可见
+
+隔离性：
+- 有 Intent args（`remoteserver` 等）→ 走原 `renderdoccmd(env, args)` 逻辑，零改动
+- 无 Intent args 且无 config 文件 → 打印日志后退出（与原行为一致）
+
+#### 改动 2: EGL Profiler Dispatch (`egl_platform.cpp`)
+
+`PopulateForReplay()` 新增运行时检测：
+```cpp
+__system_property_get("debug.egl.profiler", profilerProp);
+if(profilerProp == "1") {
+    // 优先用 eglGetProcAddress 获取 EGL 函数 → SP 能拦截
+} else {
+    // 原逻辑：dlsym 获取 → 不影响正常 remote replay
+}
+```
+
+隔离性：
+- 只在 Android 平台 + `debug.egl.profiler=1`（SP 活跃时设置）才走新路径
+- 正常 remote replay（PC 连设备）→ 该属性不存在 → 走原逻辑
+- Windows/Linux → 编译期排除（`#if ENABLED(RDOC_ANDROID)`）
+
+#### 改动 3: OpenCapture 用 Fastest 优化级别
+
+`ReplayOptions.optimisation = Fastest` 跳过 `FillWithDiscardPattern`，消除 27.6% 的 fragment shader 虚高。
+- 真机上 `glInvalidateFramebuffer` 是零开销 TBR 提示
+- `Balanced` 模式将其变成全屏 draw（纯 debug 可视化）
+- `Fastest` 模式跳过 → 与真机一致
+
+### Build
+
+APK 重编（`renderdoccmd_android.cpp` + `egl_platform.cpp` 改动）。DLL/PYD 不需要。
+
+### Result
+
+| 验证项 | 结果 |
+|--------|------|
+| SP Launch → 画面显示 | ✅ |
+| SP Realtime Counter | ✅ |
+| SP Take Snapshot（重启 SP 后）| ✅ |
+| SP Start Capture（重启 SP 后）| ✅ |
+| 正常 remote replay（无 SP）| ✅ 不受影响 |
+
+已知 UX 问题：rdc 加载期（~40s）无帧 → SP 需重启后才能 arm。后续可加 splash 解决。
+
+---
+
 ## 2026-04-10: D3D11 SkipInitialContents
 
 ### Problem
