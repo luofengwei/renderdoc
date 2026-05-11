@@ -130,6 +130,82 @@ void GLReplay::ReplayLog(uint32_t endEventID, ReplayLogType replayType)
   }
 }
 
+uint32_t GLReplay::GetCurrentDefaultFBO()
+{
+  return m_pDriver->GetCurrentDefaultFBO();
+}
+
+void GLReplay::SetCurrentDefaultFBO(uint32_t fbo)
+{
+  m_pDriver->SetCurrentDefaultFBO(fbo);
+}
+
+void GLReplay::SetReplayWindowSurface(void *surface)
+{
+  // Override the EGL surface used by MakeCurrentReplayContext.
+  // This makes replay draws go to the window surface instead of the pbuffer.
+  m_ReplayCtx.egl_wnd = (EGLSurface)surface;
+
+  // Force immediate MakeCurrent with the new surface
+  // (MakeCurrentReplayContext caches the pointer and won't re-execute for same ptr)
+  m_pDriver->m_Platform.MakeContextCurrent(m_ReplayCtx);
+}
+
+uint32_t GLReplay::DirectReplayLoop(uint32_t lastEID, uint32_t durationMs, uint32_t targetFPS,
+                                    void *windowSurface)
+{
+  // Save original state
+  EGLSurface oldSurface = m_ReplayCtx.egl_wnd;
+  GLuint oldFBO = m_pDriver->GetCurrentDefaultFBO();
+
+  // Switch to window surface + FBO 0 (direct rendering)
+  m_ReplayCtx.egl_wnd = (EGLSurface)windowSurface;
+  m_pDriver->SetCurrentDefaultFBO(0);
+
+  // Force MakeCurrent with the new surface (bypass MakeCurrentReplayContext's static cache)
+  m_pDriver->m_Platform.MakeContextCurrent(m_ReplayCtx);
+
+  // Replay loop
+  double targetFrameMs = (targetFPS > 0) ? (1000.0 / (double)targetFPS) : 0.0;
+  PerformanceTimer timer;
+  uint32_t frameCount = 0;
+  double durationD = (double)durationMs;
+
+  while(timer.GetMilliseconds() < durationD)
+  {
+    PerformanceTimer frameTimer;
+
+    m_pDriver->ReplayLog(0, lastEID, eReplay_Full);
+
+    // FPS throttle
+    if(targetFrameMs > 0.0)
+    {
+      double elapsed = frameTimer.GetMilliseconds();
+      if(elapsed < targetFrameMs)
+        Threading::Sleep((uint32_t)(targetFrameMs - elapsed));
+    }
+
+    // Swap -- through platform layer (eglSwapBuffers on the window surface)
+    m_pDriver->m_Platform.SwapBuffers(m_ReplayCtx);
+    frameCount++;
+  }
+
+  // Restore original state
+  m_pDriver->SetCurrentDefaultFBO(oldFBO);
+  m_ReplayCtx.egl_wnd = oldSurface;
+  m_pDriver->m_Platform.MakeContextCurrent(m_ReplayCtx);
+
+  return frameCount;
+}
+
+void *GLReplay::GetOutputWindowSurface(uint64_t id)
+{
+  auto it = m_OutputWindows.find(id);
+  if(it != m_OutputWindows.end())
+    return (void *)it->second.egl_wnd;
+  return nullptr;
+}
+
 SDFile *GLReplay::GetStructuredFile()
 {
   return m_pDriver->GetStructuredFile();

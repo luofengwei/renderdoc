@@ -5,6 +5,70 @@
 
 ---
 
+## 2026-05-11: DirectReplayLoop 共用函数（SP + Remote 统一）
+
+### Problem
+
+SP Local Replay 和 Remote ReplayLoop 有两套独立的循环实现：
+- SP：`renderdoccmd_android.cpp` 手动 `SetFrameEvent` + `eglSwapBuffers`（dlsym）+ timer thread
+- Remote：`replay_proxy.cpp` 手动 `m_Remote->ReplayLog` + `RefreshPreviewWindow`（双 context blit）
+
+两套代码分别有不同的帧边界语义（SP 直出 window surface，Remote 走 FBO+blit），维护成本高。
+
+### Fix
+
+**新增 `GLReplay::DirectReplayLoop(lastEID, durationMs, targetFPS, windowSurface)`** -- 共用核心循环。
+
+内部逻辑：
+1. 保存 `m_ReplayCtx.egl_wnd` + `m_CurrentDefaultFBO`
+2. 切到 window surface + FBO 0 -> 直接 `MakeContextCurrent`（绕过 `MakeCurrentReplayContext` 的 static cache）
+3. while 循环：`ReplayLog(0, lastEID, eReplay_Full)` + FPS throttle + `SwapBuffers`
+4. 恢复原始 surface + FBO + `MakeContextCurrent`
+
+**调用者改写**：
+- `RunLocalReplayLoop`（`renderdoccmd_android.cpp`）：删除 timer thread + 全局变量，改为一行 `renderer->DirectReplayLoop(...)`
+- `RemoteReplayLoopChunk`（`replay_proxy.cpp`）：用 `m_Replay->DirectReplayLoop(windowSurface)` 替换原始 while 循环
+
+**SP 黑屏修复**：
+- `renderdoccmd_android.cpp` 的 `windowConfigAttribs` 加 `EGL_DEPTH_SIZE, 24, EGL_STENCIL_SIZE, 8, EGL_ALPHA_SIZE, 8`
+- 之前只请求了 RGB8，缺少 depth/stencil -> 3D 场景深度测试失败 -> 黑屏
+- 修复后 SP Snapshot 画面正常（花花 Boss 3D 场景可见）
+- 手机屏幕仍显示 RenderDoc splash -- 正常行为（SP profiler wrapper 拦截帧数据）
+
+**Files**:
+- `renderdoc/replay/replay_driver.h` -- 新增 `virtual DirectReplayLoop(...)` + `virtual GetOutputWindowSurface(...)` 默认空实现
+- `renderdoc/driver/gl/gl_replay.h` -- 新增声明
+- `renderdoc/driver/gl/gl_replay.cpp` -- 实现 `DirectReplayLoop` + `GetOutputWindowSurface`
+- `renderdoc/api/replay/renderdoc_replay.h` -- 公共 API 新增 `DirectReplayLoop` 纯虚
+- `renderdoc/replay/replay_controller.h/.cpp` -- 转发到 `m_pDevice`
+- `renderdoc/core/replay_proxy.cpp` -- `RemoteReplayLoopChunk` 改用 `DirectReplayLoop`
+- `renderdoccmd/renderdoccmd_android.cpp` -- `RunLocalReplayLoop` 简化 + EGL config 修复
+
+### Invasiveness
+
+**原生流程零入侵**：
+- `MakeCurrentReplayContext` **不改**（`DirectReplayLoop` 内部直接调 `m_Platform.MakeContextCurrent` 绕过 static cache）
+- 无新增成员变量
+- 所有改动是纯新增函数 / 带默认空实现的 virtual / 替换自有 POC 代码
+
+### Build
+
+APK + DLL + PYD 均需重编（新增 API + `renderdoccmd_android.cpp` 改动）。
+
+### Verification
+
+| Workflow | Result |
+|----------|--------|
+| Remote ReplayLoop (`with vft limit.rdc`, 10s) | **724 frames / 10.01s = 72.3 FPS** -- logcat 确认走 `DirectReplayLoop with preview window surface` |
+| SP Direct Replay (`花花Boss白天.rdc`, 180s, 45fps) | **7083 frames / 180s = 39.4 FPS** -- SP Snapshot 画面正常（花花 Boss 3D 场景），GPU counter 数据正常 |
+
+### em-dash 清理
+
+MSVC codepage 936 将 Unicode em-dash (U+2014) 视为 C4819 警告（Warnings as Errors）。清理了 4 个源文件中的 `--` -> `--`：
+- `renderdoc_replay.h`、`egl_platform.cpp`、`gl_replay.cpp`、`renderdoccmd_android.cpp`、`replay_proxy.cpp`
+
+---
+
 ## 2026-05-09: SP-Capturable Local ReplayLoop + EGL Profiler Visibility
 
 ### Problem

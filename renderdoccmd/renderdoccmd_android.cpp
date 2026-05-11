@@ -487,23 +487,13 @@ static double JsonGetNumber(const std::string &json, const char *key)
   return atof(json.c_str() + pos);
 }
 
-// SP-capturable local ReplayLoop: loads rdc on device, replays to Window Surface with eglSwapBuffers.
+// SP-capturable local ReplayLoop: loads rdc on device, replays directly to Window Surface.
 // Called when SP launches renderdoccmd without Intent args and sp_replay_config.json exists.
-// Uses ReplayLoop(window, texid) — same path as remote replay loop (ReplayLog + Display + swap).
-static IReplayController *g_spRenderer = NULL;
-static double g_spDurationSeconds = 0;
-
-static void *spTimerThread(void *)
-{
-  // Sleep for the configured duration, then cancel the replay loop
-  usleep((useconds_t)(g_spDurationSeconds * 1000000.0));
-  if(g_spRenderer)
-  {
-    ANDROID_LOG("RunLocalReplayLoop: duration reached, cancelling loop");
-    g_spRenderer->CancelReplayLoop();
-  }
-  return NULL;
-}
+//
+// KEY DESIGN: Uses DirectReplayLoop() -- the shared core loop that rebinds the replay context
+// directly to the ANativeWindow surface and sets m_CurrentDefaultFBO=0 so ReplayLog renders
+// directly to the window surface. All draw calls + eglSwapBuffers happen on the same EGL
+// context/surface, exactly matching real device behavior -- required for SP to see a complete frame.
 
 static void RunLocalReplayLoop()
 {
@@ -532,7 +522,6 @@ static void RunLocalReplayLoop()
   std::string rdcPath = JsonGetString(jsonContent, "rdc_path");
   double durationSeconds = JsonGetNumber(jsonContent, "duration_seconds");
   int targetFPS = (int)JsonGetNumber(jsonContent, "target_fps");
-  (void)targetFPS;    // FPS control not used in ReplayLoop path (runs at GPU native speed)
 
   if(rdcPath.empty())
   {
@@ -594,95 +583,35 @@ static void RunLocalReplayLoop()
 
   ANDROID_LOG("RunLocalReplayLoop: replay controller created");
 
-  // Find texture ID for display (same logic as renderdoccmd.cpp DisplayRendererPreview)
-  ResourceId texid;
-
-  // Strategy 1: find SwapBuffer texture
-  rdcarray<TextureDescription> texs = renderer->GetTextures();
-  for(const TextureDescription &desc : texs)
+  // Get last EID for full-frame replay
+  const rdcarray<ActionDescription> &actions = renderer->GetRootActions();
+  uint32_t lastEID = 0;
+  if(!actions.empty())
   {
-    if(desc.creationFlags & TextureCategory::SwapBuffer)
-    {
-      texid = desc.resourceId;
-      ANDROID_LOG("RunLocalReplayLoop: found SwapBuffer texture");
-      break;
-    }
+    const ActionDescription *last = &actions.back();
+    while(!last->children.empty())
+      last = &last->children.back();
+    lastEID = last->eventId;
   }
 
-  // Strategy 2: if last action is Present, use its copyDestination
-  if(texid == ResourceId())
-  {
-    const rdcarray<ActionDescription> &actions = renderer->GetRootActions();
-    if(!actions.empty())
-    {
-      const ActionDescription *lastAction = &actions.back();
-      while(!lastAction->children.empty())
-        lastAction = &lastAction->children.back();
-      if(lastAction->flags & ActionFlags::Present)
-      {
-        ResourceId id = lastAction->copyDestination;
-        if(id != ResourceId())
-        {
-          texid = id;
-          ANDROID_LOG("RunLocalReplayLoop: using Present copyDestination");
-        }
-      }
-    }
-  }
+  uint32_t durationMs = (uint32_t)(durationSeconds * 1000.0);
+  ANDROID_LOG("RunLocalReplayLoop: lastEID=%u, starting DirectReplayLoop (duration=%ums, fps=%d)",
+              lastEID, durationMs, targetFPS);
 
-  // Strategy 3: fallback — find the largest 2D texture
-  if(texid == ResourceId())
-  {
-    uint64_t bestArea = 0;
-    for(const TextureDescription &desc : texs)
-    {
-      if(desc.width < 64 || desc.height < 64)
-        continue;
-      if(desc.dimension != 2)
-        continue;
-      uint64_t area = (uint64_t)desc.width * (uint64_t)desc.height;
-      if(area > bestArea)
-      {
-        bestArea = area;
-        texid = desc.resourceId;
-      }
-    }
-    if(texid != ResourceId())
-      ANDROID_LOG("RunLocalReplayLoop: using largest texture (fallback)");
-  }
+  // Use WindowingData overload -- creates output window via platform layer (same as Remote
+  // ReplayLoop's preview window), so SP profiler wrapper sees a proper surface and can present.
+  WindowingData wd = CreateAndroidWindowingData(android_state->window);
+  uint32_t frameCount =
+      renderer->DirectReplayLoop(lastEID, durationMs, (uint32_t)targetFPS, wd);
 
-  if(texid == ResourceId())
-    ANDROID_LOG("RunLocalReplayLoop: WARNING — no texture found, display may be blank");
-
-  // Use ReplayLoop(window, texid) — same proven path as remote replay loop
-  // ReplayLoop internally does: ReplayLog(lastEID) → Display() → eglSwapBuffers, in a loop.
-  // It blocks until CancelReplayLoop() is called from another thread.
-  ANativeWindow *window = android_state->window;
-  WindowingData wnd = CreateAndroidWindowingData(window);
-
-  ANDROID_LOG("RunLocalReplayLoop: starting ReplayLoop (duration=%.0fs)", durationSeconds);
-
-  // Start timer thread to cancel loop after duration
-  g_spRenderer = renderer;
-  g_spDurationSeconds = durationSeconds;
-  pthread_t timerThread;
-  pthread_create(&timerThread, NULL, spTimerThread, NULL);
-
-  // This blocks until CancelReplayLoop() is called
-  renderer->ReplayLoop(wnd, texid);
-
-  pthread_join(timerThread, NULL);
-  g_spRenderer = NULL;
-
-  uint32_t frameCount = renderer->GetReplayLoopFrameCount();
-  ANDROID_LOG("RunLocalReplayLoop: DONE — %u frames", frameCount);
+  ANDROID_LOG("RunLocalReplayLoop: DONE -- %u frames", frameCount);
 
   // Write result file
   std::string resultPath = appFolder + "/sp_replay_loop_result.txt";
   FILE *resultFile = fopen(resultPath.c_str(), "w");
   if(resultFile)
   {
-    fprintf(resultFile, "frames=%u\nmode=sp_local_replay\n", frameCount);
+    fprintf(resultFile, "frames=%u\nmode=sp_local_replay_direct\n", frameCount);
     fclose(resultFile);
     ANDROID_LOG("RunLocalReplayLoop: result written to %s", resultPath.c_str());
   }
@@ -707,7 +636,7 @@ void *cmdthread(void *)
   }
   else
   {
-    // No Intent args — check if SP launched us for local replay
+    // No Intent args -- check if SP launched us for local replay
     ANDROID_LOG("No Intent args, checking sp_replay_config.json");
     m_CmdLock.lock();
     RunLocalReplayLoop();

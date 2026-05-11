@@ -178,6 +178,26 @@ public:
   virtual void ReplayLog(uint32_t endEventID, ReplayLogType replayType) = 0;
   virtual SDFile *GetStructuredFile() = 0;
 
+  // Direct window surface support: get/set the "fake backbuffer" FBO.
+  // When set to 0, glBindFramebuffer(0) in capture maps to real FBO 0 (window surface).
+  virtual uint32_t GetCurrentDefaultFBO() { return 0; }
+  virtual void SetCurrentDefaultFBO(uint32_t fbo) {}
+
+  // Override the EGL surface used by MakeCurrentReplayContext.
+  // When non-null, replay context binds to this surface instead of the original pbuffer.
+  virtual void SetReplayWindowSurface(void *surface) {}
+
+  // Direct replay loop: rebind replay context to windowSurface, loop ReplayLog + SwapBuffers.
+  // Returns total frame count. Shared by SP Local Replay and Remote ReplayLoop.
+  virtual uint32_t DirectReplayLoop(uint32_t lastEID, uint32_t durationMs, uint32_t targetFPS,
+                                    void *windowSurface)
+  {
+    return 0;
+  }
+
+  // Get the raw EGL surface for a given output window (for passing to DirectReplayLoop).
+  virtual void *GetOutputWindowSurface(uint64_t id) { return nullptr; }
+
   virtual rdcarray<uint32_t> GetPassEvents(uint32_t eventId) = 0;
 
   virtual void InitPostVSBuffers(uint32_t eventId) = 0;

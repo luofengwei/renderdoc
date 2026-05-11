@@ -489,7 +489,7 @@ bool EGLDispatchTable::PopulateForReplay()
   // When debug.egl.profiler=1, the Adreno EGL driver wraps functions returned by
   // eglGetProcAddress but not those obtained via dlsym. We must prefer eglGetProcAddress
   // so the profiler can intercept EGL calls (especially eglSwapBuffers for frame boundaries).
-  // This is ONLY enabled when the profiler property is set — normal remote replay is unaffected.
+  // This is ONLY enabled when the profiler property is set -- normal remote replay is unaffected.
   char profilerProp[92] = {};
   __system_property_get("debug.egl.profiler", profilerProp);
   bool spProfilerActive = (profilerProp[0] == '1' && profilerProp[1] == '\0');

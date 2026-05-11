@@ -241,6 +241,12 @@ public:
   uint32_t RemoteReplayLoop(uint32_t durationMs, uint32_t targetFPS = 0);
   void CancelReplayLoop();
   uint32_t GetReplayLoopFrameCount();
+  void SetDirectWindowSurfaceReplay(bool enabled);
+  void SetReplayWindowSurface(void *surface);
+  uint32_t DirectReplayLoop(uint32_t lastEID, uint32_t durationMs, uint32_t targetFPS,
+                            void *windowSurface);
+  uint32_t DirectReplayLoop(uint32_t lastEID, uint32_t durationMs, uint32_t targetFPS,
+                            WindowingData window);
 
   rdcstr CreateRGPProfile(WindowingData window);
 
@@ -273,6 +279,7 @@ private:
   int32_t m_ReplayLoopCancel = 0;
   int32_t m_ReplayLoopFinished = 0;
   int32_t m_ReplayLoopFrameCount = 0;
+  uint32_t m_SavedDefaultFBO = 0;
 
   RDResult m_FatalError = ResultCode::Succeeded;
   ResultDetails m_FatalErrorResult = {ResultCode::Succeeded};

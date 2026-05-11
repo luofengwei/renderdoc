@@ -237,6 +237,13 @@ public:
   void ReplayLog(uint32_t endEventID, ReplayLogType replayType);
   SDFile *GetStructuredFile();
 
+  uint32_t GetCurrentDefaultFBO();
+  void SetCurrentDefaultFBO(uint32_t fbo);
+  void SetReplayWindowSurface(void *surface);
+  uint32_t DirectReplayLoop(uint32_t lastEID, uint32_t durationMs, uint32_t targetFPS,
+                            void *windowSurface);
+  void *GetOutputWindowSurface(uint64_t id);
+
   rdcarray<uint32_t> GetPassEvents(uint32_t eventId);
 
   rdcarray<WindowingSystem> GetSupportedWindowSystems();

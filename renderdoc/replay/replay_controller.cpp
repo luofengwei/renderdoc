@@ -1925,6 +1925,63 @@ uint32_t ReplayController::GetReplayLoopFrameCount()
   return (uint32_t)Atomic::CmpExch32(&m_ReplayLoopFrameCount, 0, 0);
 }
 
+void ReplayController::SetDirectWindowSurfaceReplay(bool enabled)
+{
+  CHECK_REPLAY_THREAD();
+
+  if(enabled)
+  {
+    m_SavedDefaultFBO = m_pDevice->GetCurrentDefaultFBO();
+    m_pDevice->SetCurrentDefaultFBO(0);
+    RDCLOG("SetDirectWindowSurfaceReplay: enabled (saved FBO=%u)", m_SavedDefaultFBO);
+  }
+  else
+  {
+    m_pDevice->SetCurrentDefaultFBO(m_SavedDefaultFBO);
+    RDCLOG("SetDirectWindowSurfaceReplay: disabled (restored FBO=%u)", m_SavedDefaultFBO);
+  }
+}
+
+void ReplayController::SetReplayWindowSurface(void *surface)
+{
+  CHECK_REPLAY_THREAD();
+  m_pDevice->SetReplayWindowSurface(surface);
+}
+
+uint32_t ReplayController::DirectReplayLoop(uint32_t lastEID, uint32_t durationMs,
+                                            uint32_t targetFPS, void *windowSurface)
+{
+  CHECK_REPLAY_THREAD();
+  return m_pDevice->DirectReplayLoop(lastEID, durationMs, targetFPS, windowSurface);
+}
+
+uint32_t ReplayController::DirectReplayLoop(uint32_t lastEID, uint32_t durationMs,
+                                            uint32_t targetFPS, WindowingData window)
+{
+  CHECK_REPLAY_THREAD();
+
+  // Create output window via platform layer (same path as Remote ReplayLoop's preview window)
+  uint64_t outputId = m_pDevice->MakeOutputWindow(window, false);
+  if(outputId == 0)
+  {
+    RDCERR("DirectReplayLoop: MakeOutputWindow failed");
+    return 0;
+  }
+
+  void *surface = m_pDevice->GetOutputWindowSurface(outputId);
+  if(!surface)
+  {
+    RDCERR("DirectReplayLoop: GetOutputWindowSurface returned null");
+    m_pDevice->DestroyOutputWindow(outputId);
+    return 0;
+  }
+
+  uint32_t frameCount = m_pDevice->DirectReplayLoop(lastEID, durationMs, targetFPS, surface);
+
+  m_pDevice->DestroyOutputWindow(outputId);
+  return frameCount;
+}
+
 ReplayOutput *ReplayController::CreateOutput(WindowingData window, ReplayOutputType type)
 {
   CHECK_REPLAY_THREAD();

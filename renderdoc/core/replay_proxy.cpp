@@ -1436,45 +1436,30 @@ uint32_t ReplayProxy::Proxied_RemoteReplayLoopChunk(ParamSerialiser &paramser,
     rdcstr debugResultPath = FileIO::GetAppFolderFilename("remote_loop_result.txt");
     RDCLOG("RemoteReplayLoop: result will be written to: %s", debugResultPath.c_str());
 
-    // Client may disconnect USB during this -- that's OK, we keep looping
-    double durationD = (double)durationMs;
-    double targetFrameMs = (targetFPS > 0) ? (1000.0 / (double)targetFPS) : 0.0;
-    PerformanceTimer timer;
+    // Ensure preview window is created so we have a surface to render into
+    InitPreviewWindow();
+
+    // Try DirectReplayLoop (renders directly to window surface -- SP compatible)
+    void *windowSurface = nullptr;
+    if(m_Replay && m_PreviewOutput)
+      windowSurface = m_Replay->GetOutputWindowSurface(m_PreviewOutput);
+
     uint32_t frameCount = 0;
+    double elapsedMs = 0.0;
 
-    RDCLOG("RemoteReplayLoop: entering while loop, durationD=%.1f, targetFrameMs=%.1f", durationD,
-           targetFrameMs);
-
-    while(timer.GetMilliseconds() < durationD)
+    if(windowSurface)
     {
-      PerformanceTimer frameTimer;
-
-      m_Remote->ReplayLog(lastEID, eReplay_Full);
-
-      RDResult err = m_Remote->FatalErrorCheck();
-      if(err != ResultCode::Succeeded)
-      {
-        RDCERR("RemoteReplayLoop: GPU error after %u frames, stopping", frameCount);
-        break;
-      }
-
-      // FPS cap: sleep BEFORE present so RefreshPreviewWindow is not starved
-      if(targetFrameMs > 0.0)
-      {
-        double frameElapsed = frameTimer.GetMilliseconds();
-        if(frameElapsed < targetFrameMs)
-        {
-          uint32_t sleepMs = (uint32_t)(targetFrameMs - frameElapsed);
-          if(sleepMs > 0)
-            Threading::Sleep(sleepMs);
-        }
-      }
-
-      RefreshPreviewWindow();
-      frameCount++;
+      RDCLOG("RemoteReplayLoop: using DirectReplayLoop with preview window surface %p",
+             windowSurface);
+      PerformanceTimer timer;
+      frameCount =
+          m_Replay->DirectReplayLoop(lastEID, durationMs, targetFPS, windowSurface);
+      elapsedMs = timer.GetMilliseconds();
     }
-
-    double elapsedMs = timer.GetMilliseconds();
+    else
+    {
+      RDCERR("RemoteReplayLoop: no window surface available, cannot run DirectReplayLoop");
+    }
 
     // Write result to file on device so client can adb pull after reconnect
     rdcstr resultPath = FileIO::GetAppFolderFilename("remote_loop_result.txt");

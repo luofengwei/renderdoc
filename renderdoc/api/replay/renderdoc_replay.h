@@ -491,6 +491,58 @@ Only works when connected to a remote device; returns 0 and does nothing in loca
 )");
   virtual uint32_t GetReplayLoopFrameCount() = 0;
 
+  DOCUMENT(R"(Enable or disable direct window surface replay mode.
+
+When enabled, the internal 'fake backbuffer' FBO is bypassed -- glBindFramebuffer(0) in the
+capture maps to real FBO 0 (the window surface). This allows all draw calls to render directly
+to the window surface, which is required for Snapdragon Profiler to see a complete frame.
+
+:param bool enabled: ``True`` to enable direct window surface mode, ``False`` to restore normal.
+)");
+  virtual void SetDirectWindowSurfaceReplay(bool enabled) = 0;
+
+  DOCUMENT(R"(Set the EGL surface for the replay context to render into.
+
+Used together with :meth:`SetDirectWindowSurfaceReplay` -- pass the EGLSurface created from
+ANativeWindow so that the replay context binds to it on every MakeCurrentReplayContext call.
+
+:param void* surface: The EGLSurface pointer (cast to void*), or NULL to restore original.
+)");
+  virtual void SetReplayWindowSurface(void *surface) = 0;
+
+  DOCUMENT(R"(Run a direct replay loop on the given window surface.
+
+Rebinds the replay context to the provided EGL window surface, then loops ReplayLog +
+eglSwapBuffers for the specified duration. This is the shared core loop used by both
+SP Local Replay and Remote ReplayLoop -- all draw calls render directly to the window
+surface (SP-compatible, no FBO blit).
+
+:param int lastEID: The last event ID to replay each frame (typically the final action's eventId).
+:param int durationMs: Total duration of the loop in milliseconds.
+:param int targetFPS: Target frames per second (0 = no cap, run as fast as possible).
+:param void* windowSurface: The EGLSurface pointer to render into (cast to void*).
+:return: The total number of frames replayed.
+:rtype: int
+)");
+  virtual uint32_t DirectReplayLoop(uint32_t lastEID, uint32_t durationMs, uint32_t targetFPS,
+                                    void *windowSurface) = 0;
+
+  DOCUMENT(R"(Run a direct replay loop, creating a window surface from the given windowing data.
+
+Convenience overload that creates an output window internally, extracts the EGL surface,
+runs the replay loop, then destroys the output window. Use this when you have a
+WindowingData (e.g. from CreateAndroidWindowingData) instead of a raw EGL surface.
+
+:param int lastEID: The last event ID to replay each frame.
+:param int durationMs: Total duration of the loop in milliseconds.
+:param int targetFPS: Target frames per second (0 = no cap).
+:param WindowingData window: The windowing data to create the surface from.
+:return: The total number of frames replayed.
+:rtype: int
+)");
+  virtual uint32_t DirectReplayLoop(uint32_t lastEID, uint32_t durationMs, uint32_t targetFPS,
+                                    WindowingData window) = 0;
+
   DOCUMENT("Notify the interface that the file it has open has been changed on disk.");
   virtual void FileChanged() = 0;
 

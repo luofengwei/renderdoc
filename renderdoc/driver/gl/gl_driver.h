@@ -690,6 +690,7 @@ public:
 
   GLuint GetFakeVAO0() { return m_Global_VAO0; }
   GLuint GetCurrentDefaultFBO() { return m_CurrentDefaultFBO; }
+  void SetCurrentDefaultFBO(uint32_t fbo) { m_CurrentDefaultFBO = (GLuint)fbo; }
   const APIEvent &GetEvent(uint32_t eventId);
 
   const ActionDescription &GetRootAction() { return m_ParentAction; }
