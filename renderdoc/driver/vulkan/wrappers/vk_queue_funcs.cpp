@@ -493,6 +493,12 @@ void WrappedVulkan::ReplayQueueSubmit(VkQueue queue, VkSubmitInfo2 submitInfo, r
 
       submitInfo.pCommandBufferInfos = rerecordedCmds.data();
 
+      // RDCLoopRunner: while capturing the first frame of a replay loop, record this submission
+      // (queue + re-recorded command buffers) so subsequent loop frames can re-issue it directly
+      // via ReplayLoopResubmit() without re-parsing/re-recording the capture.
+      if(m_ReplayLoopRecord)
+        m_ReplayLoopSubmits.push_back({queue, rerecordedCmds});
+
       if(Vulkan_Debug_SingleSubmitFlushing())
       {
         submitInfo.commandBufferInfoCount = 1;

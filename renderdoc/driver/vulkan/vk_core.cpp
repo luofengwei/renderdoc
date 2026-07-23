@@ -5069,22 +5069,33 @@ void WrappedVulkan::ReplayLog(uint32_t startEventID, uint32_t endEventID, Replay
     startEventID = 1;
     partial = false;
 
-    AddPendingObjectCleanup([this]() {
-      for(const rdcpair<VkCommandPool, VkCommandBuffer> &rerecord : m_RerecordCmdList)
-      {
-        m_commandQueueFamilies.erase(GetResID(rerecord.second));
-        vkFreeCommandBuffers(GetDev(), rerecord.first, 1, &rerecord.second);
-      }
+    // RDCLoopRunner: while capturing the first frame of a replay loop, do NOT schedule the
+    // re-recorded command buffers to be freed -- they are kept alive and reused for subsequent loop
+    // frames, then freed by CleanupReplayLoop when the loop ends.
+    if(!m_ReplayLoopRecord)
+    {
+      AddPendingObjectCleanup([this]() {
+        for(const rdcpair<VkCommandPool, VkCommandBuffer> &rerecord : m_RerecordCmdList)
+        {
+          m_commandQueueFamilies.erase(GetResID(rerecord.second));
+          vkFreeCommandBuffers(GetDev(), rerecord.first, 1, &rerecord.second);
+        }
 
-      m_RerecordCmdList.clear();
-    });
+        m_RerecordCmdList.clear();
+      });
+    }
   }
 
-  if(!partial)
+  if(!partial && !m_SkipInitialContents)
   {
     VkMarkerRegion::Begin("!!!!RenderDoc Internal: ApplyInitialContents");
     ApplyInitialContents();
     VkMarkerRegion::End();
+
+    // RDCLoopRunner: skip repeated ApplyInitialContents on subsequent full replays within
+    // a ReplayLoop (mirrors GL m_SkipInitialContents, gl_driver.cpp). Never reset -- a fresh
+    // WrappedVulkan is created per capture-open, so it starts false.
+    m_SkipInitialContents = true;
   }
 
   m_State = CaptureState::ActiveReplaying;
@@ -5955,6 +5966,57 @@ VkCommandBuffer WrappedVulkan::RerecordCmdBuf(ResourceId cmdid)
   }
 
   return it->second;
+}
+
+// RDCLoopRunner: command-buffer reuse for DirectReplayLoop.
+//
+// The first loop frame runs a normal full ReplayLog with capture mode on: the re-recorded command
+// buffers are allocated re-submittable (ONE_TIME_SUBMIT omitted, see vkBeginCommandBuffer replay)
+// and are not freed at the next ReplayLog (the free-cleanup registration is skipped), and every
+// replayed vkQueueSubmit records its (queue, command buffers) here. Subsequent frames skip the
+// expensive chunk parse + re-record entirely and just re-issue these submissions.
+void WrappedVulkan::StartReplayLoopCapture()
+{
+  // Drain any pending object cleanups first (e.g. the command-buffer free scheduled by the
+  // cold-start SetFrameEvent's ReplayLog). Otherwise a stale cleanup could run during the loop and
+  // free the very command buffers we're about to capture and reuse. FlushQ idles the queue and runs
+  // all pending cleanups, leaving m_RerecordCmdList empty so it accumulates only this frame's buffers.
+  FlushQ();
+  m_ReplayLoopRecord = true;
+  m_ReplayLoopSubmits.clear();
+}
+
+void WrappedVulkan::StopReplayLoopCapture()
+{
+  m_ReplayLoopRecord = false;
+}
+
+void WrappedVulkan::ReplayLoopResubmit()
+{
+  // Re-issue the captured submissions. DoSubmit strips all semaphores/fences and submits command
+  // buffers only, so re-issuing the identical command buffers reproduces the exact GPU work of the
+  // first frame with none of the CPU re-record cost.
+  for(ReplayLoopSubmit &submit : m_ReplayLoopSubmits)
+  {
+    VkSubmitInfo2 submitInfo = {VK_STRUCTURE_TYPE_SUBMIT_INFO_2};
+    submitInfo.commandBufferInfoCount = (uint32_t)submit.cmds.size();
+    submitInfo.pCommandBufferInfos = submit.cmds.data();
+    DoSubmit(submit.queue, submitInfo);
+  }
+}
+
+void WrappedVulkan::CleanupReplayLoop()
+{
+  // Free the re-recorded command buffers we kept alive for reuse (mirrors the pending-cleanup that
+  // is skipped while m_ReplayLoopRecord is set). The caller must have idled the queue first.
+  for(const rdcpair<VkCommandPool, VkCommandBuffer> &rerecord : m_RerecordCmdList)
+  {
+    m_commandQueueFamilies.erase(GetResID(rerecord.second));
+    vkFreeCommandBuffers(GetDev(), rerecord.first, 1, &rerecord.second);
+  }
+  m_RerecordCmdList.clear();
+  m_RerecordCmds.clear();
+  m_ReplayLoopSubmits.clear();
 }
 
 ResourceId WrappedVulkan::GetPartialCommandBuffer()

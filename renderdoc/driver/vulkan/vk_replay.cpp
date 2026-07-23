@@ -212,6 +212,85 @@ void VulkanReplay::ReplayLog(uint32_t endEventID, ReplayLogType replayType)
   m_pDriver->ReplayLog(0, endEventID, replayType);
 }
 
+void *VulkanReplay::GetOutputWindowSurface(uint64_t id)
+{
+  // RDCLoopRunner: Vulkan has no single EGL-style "surface pointer"; the OutputWindow is
+  // keyed by id in m_OutputWindows. Encode the id as a non-null pointer so the
+  // driver-agnostic proxy (replay_proxy.cpp RemoteReplayLoopChunk) proceeds, and let
+  // DirectReplayLoop decode it back to the window id. m_OutputWinID starts at 1, so a
+  // valid id is never 0 -> the pointer is never null for a real window.
+  auto it = m_OutputWindows.find(id);
+  if(it != m_OutputWindows.end())
+    return (void *)(uintptr_t)id;
+  return NULL;
+}
+
+uint32_t VulkanReplay::DirectReplayLoop(uint32_t lastEID, uint32_t durationMs, uint32_t targetFPS,
+                                        void *windowSurface)
+{
+  // Decode the output-window id we encoded in GetOutputWindowSurface().
+  uint64_t id = (uint64_t)(uintptr_t)windowSurface;
+
+  auto it = m_OutputWindows.find(id);
+  if(it == m_OutputWindows.end())
+  {
+    RDCERR("DirectReplayLoop: invalid output window id %llu", (unsigned long long)id);
+    return 0;
+  }
+
+  double targetFrameMs = (targetFPS > 0) ? (1000.0 / (double)targetFPS) : 0.0;
+  PerformanceTimer timer;
+  uint32_t frameCount = 0;
+  double durationD = (double)durationMs;
+
+  while(timer.GetMilliseconds() < durationD)
+  {
+    PerformanceTimer frameTimer;
+
+    // GPU work: replay the whole frame 0..lastEID.
+    // RDCLoopRunner: command-buffer reuse. The first iteration runs a full ReplayLog in capture
+    // mode, which records the frame's re-recorded command buffers (kept alive, re-submittable) and
+    // captures its GPU submissions. Every subsequent iteration re-issues those cached submissions
+    // directly, skipping the expensive per-frame chunk parse + command-buffer re-record (~118ms on
+    // Adreno 740). The submitted command buffers are byte-identical to the first frame's, so GPU
+    // behaviour is unchanged from replaying the frame afresh.
+    if(frameCount == 0)
+    {
+      m_pDriver->StartReplayLoopCapture();
+      m_pDriver->ReplayLog(0, lastEID, eReplay_Full);
+      m_pDriver->StopReplayLoopCapture();
+    }
+    else
+    {
+      m_pDriver->ReplayLoopResubmit();
+    }
+
+    // Advance + present the swapchain to pace the loop and give GPU backpressure.
+    // We do NOT render the texture viewer into the backbuffer; a black/stale backbuffer
+    // is acceptable for a benchmark. BindOutputWindow acquires the next swapchain image;
+    // FlipOutputWindow blits bb->swapchain, presents (with a QueueWaitIdle that also serialises the
+    // reused command buffers between frames), and self-recreates on OUT_OF_DATE.
+    BindOutputWindow(id, false);
+    FlipOutputWindow(id);
+
+    // FPS throttle (matches GLReplay::DirectReplayLoop).
+    if(targetFrameMs > 0.0)
+    {
+      double elapsed = frameTimer.GetMilliseconds();
+      if(elapsed < targetFrameMs)
+        Threading::Sleep((uint32_t)(targetFrameMs - elapsed));
+    }
+
+    frameCount++;
+  }
+
+  // Free the re-recorded command buffers we kept alive for reuse. The last FlipOutputWindow's
+  // FlushQ has already idled the queue, so this is safe.
+  m_pDriver->CleanupReplayLoop();
+
+  return frameCount;
+}
+
 SDFile *VulkanReplay::GetStructuredFile()
 {
   return m_pDriver->GetStructuredFile();

@@ -363,6 +363,10 @@ private:
   bool m_MarkedActive = false;
   uint32_t m_SubmitCounter = 0;
 
+  // RDCLoopRunner: skip repeated ApplyInitialContents on subsequent full replays within a
+  // ReplayLoop (see WrappedVulkan::ReplayLog). Mirrors GL m_SkipInitialContents. Never reset.
+  bool m_SkipInitialContents = false;
+
   uint64_t threadSerialiserTLSSlot;
 
   Threading::CriticalSection m_ThreadSerialisersLock;
@@ -999,6 +1003,19 @@ private:
   // above map
   rdcarray<rdcpair<VkCommandPool, VkCommandBuffer>> m_RerecordCmdList;
 
+  // RDCLoopRunner: command-buffer reuse for DirectReplayLoop. When m_ReplayLoopRecord is set (only
+  // during the first frame of a replay loop), the re-recorded command buffers are made re-submittable
+  // (no ONE_TIME_SUBMIT) and kept alive (their free-cleanup is skipped), and every replayed
+  // vkQueueSubmit's (queue, command buffers) is captured into m_ReplayLoopSubmits. Subsequent loop
+  // frames just re-issue m_ReplayLoopSubmits via DoSubmit, skipping the expensive chunk re-record.
+  bool m_ReplayLoopRecord = false;
+  struct ReplayLoopSubmit
+  {
+    VkQueue queue;
+    rdcarray<VkCommandBufferSubmitInfo> cmds;
+  };
+  rdcarray<ReplayLoopSubmit> m_ReplayLoopSubmits;
+
   // There is only a state while currently partially replaying, it's
   // undefined/empty otherwise.
   VulkanRenderState m_RenderState;
@@ -1007,6 +1024,12 @@ private:
   bool HasRerecordCmdBuf(ResourceId cmdid);
   bool IsRenderpassOpen(ResourceId cmdid);
   VkCommandBuffer RerecordCmdBuf(ResourceId cmdid);
+
+  // RDCLoopRunner: replay-loop command-buffer reuse (see m_ReplayLoopRecord).
+  void StartReplayLoopCapture();
+  void StopReplayLoopCapture();
+  void ReplayLoopResubmit();
+  void CleanupReplayLoop();
 
   ResourceId GetPartialCommandBuffer();
 

@@ -5,6 +5,20 @@
 
 ---
 
+## 2026-07-23: Vulkan DirectReplayLoop 合并（同事贡献）
+
+`driver/vulkan/`：新增 `VulkanReplay::DirectReplayLoop` + `GetOutputWindowSurface`，配套命令缓冲复用（`StartReplayLoopCapture`/`StopReplayLoopCapture`/`ReplayLoopResubmit`/`CleanupReplayLoop`）+ `m_SkipInitialContents`，镜像 GL 侧实现。让 remote replayloop 支持 Vulkan capture。首帧全录、后续帧直接重发缓存 submit，跳过 ~118ms/帧的 chunk 重录（Adreno 740）。
+
+合并踩坑：源文件注释含非 ASCII em-dash「—」→ 代码页 936(GBK) 下 `C4819` + warnings-as-errors → 编译失败，已替换为 ASCII `--`（详见宿主 `MISTAKES.md` M008）。同事 vcxproj 的 `v143`/`WindowsTargetPlatformVersion` 改动**未取**（build 命令 `-p:PlatformToolset=v143` 已全局统一 toolset）。
+
+**改动文件**（6，均未提交）：`vk_replay.h/.cpp`、`vk_core.h/.cpp`、`wrappers/vk_cmd_funcs.cpp`、`wrappers/vk_queue_funcs.cpp`。
+
+**验证**：DLL + APK 编译验证通过；GL 回归（`with vft limit.rdc`, 10s）无退化（~108 FPS）。真机 Vulkan 运行时验证仍缺 Vulkan `.rdc`（现有 capture 全是 GLES）。
+
+> 注：本会话曾在此基础上加过 `RemoteReplayLoop` 的 `startDelayMs`（断 USB 宽限），后按需求方要求**回退**（改走 WiFi ADB 方向，详见宿主 `docs/handoff/session_handoff.md`「搁置」条）。
+
+---
+
 ## 2026-05-11: DirectReplayLoop 共用函数（SP + Remote 统一）
 
 ### Problem

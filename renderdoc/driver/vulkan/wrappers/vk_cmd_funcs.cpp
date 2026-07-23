@@ -1676,8 +1676,11 @@ bool WrappedVulkan::Serialise_vkBeginCommandBuffer(SerialiserType &ser, VkComman
 
         m_RerecordCmdList.push_back({AllocateInfo.commandPool, cmd});
 
-        // add one-time submit flag as this partial cmd buffer will only be submitted once
-        BeginInfo.flags |= VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+        // add one-time submit flag as this partial cmd buffer will only be submitted once.
+        // RDCLoopRunner: except while capturing a replay loop's first frame, where the command
+        // buffer must be re-submittable across loop iterations (see WrappedVulkan::DirectReplayLoop).
+        if(!m_ReplayLoopRecord)
+          BeginInfo.flags |= VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
         if(AllocateInfo.level == VK_COMMAND_BUFFER_LEVEL_SECONDARY)
         {
           BeginInfo.flags |= VK_COMMAND_BUFFER_USAGE_SIMULTANEOUS_USE_BIT;
